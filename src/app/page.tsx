@@ -133,21 +133,67 @@ export default function Home() {
   const [selectedTarget, setSelectedTarget] = useState<Character | null>(null);
   const [battleLog, setBattleLog] = useState<string[]>([]);
   const [actionPhase, setActionPhase] = useState<'select' | 'target' | 'execute'>('select');
+  const [currentStage, setCurrentStage] = useState(1);
+  const [isFlashing, setIsFlashing] = useState(false);
+  const [playerActionsUsed, setPlayerActionsUsed] = useState(0);
+  const [enemyActionsUsed, setEnemyActionsUsed] = useState(0);
+
+  const generateEnemiesForStage = (stage: number) => {
+    const enemies = [];
+    const numEnemies = Math.min(stage, 3); 
+    
+    for (let i = 0; i < numEnemies; i++) {
+      const enemyTemplate = ENEMY_CHARACTERS[Math.floor(Math.random() * ENEMY_CHARACTERS.length)];
+      const enhancedHp = enemyTemplate.maxHp + (stage - 1) * 10;
+      enemies.push({
+        ...enemyTemplate,
+        id: `${enemyTemplate.id}_${i}`,
+        maxHp: enhancedHp,
+        hp: enhancedHp,
+        attack: enemyTemplate.attack + Math.floor((stage - 1) * 2),
+        defense: enemyTemplate.defense + Math.floor((stage - 1) * 1)
+      });
+    }
+    
+    return enemies;
+  };
 
   const startGame = () => {
     const players = [...PLAYER_CHARACTERS];
-    const enemies = [ENEMY_CHARACTERS[Math.floor(Math.random() * ENEMY_CHARACTERS.length)]];
+    const enemies = generateEnemiesForStage(1);
     
     setPlayerTeam(players);
     setEnemyTeam(enemies);
+    setCurrentStage(1);
     
     const allCharacters = [...players, ...enemies].sort((a, b) => b.speed - a.speed);
     setTurnOrder(allCharacters);
     setCurrentTurn(0);
     setGameState('battle');
-    setBattleLog(['🎮 การต่อสู้เริ่มต้น!']);
+    setBattleLog([`🎮 ด่านที่ 1 เริ่มต้น! (${enemies.length} ศัตรู)`]);
     setActionPhase('select');
+    setPlayerActionsUsed(0);
+    setEnemyActionsUsed(0);
   };
+
+  const nextStage = useCallback(() => {
+    const newStage = currentStage + 1;
+    setCurrentStage(newStage);
+    
+    // สร้างศัตรูใหม่หลายตัวตามด่าน
+    const enemies = generateEnemiesForStage(newStage);
+    setEnemyTeam(enemies);
+    
+    // รีเซ็ตตำแหน่งในการต่อสู้
+    const allCharacters = [...playerTeam, ...enemies].sort((a, b) => b.speed - a.speed);
+    setTurnOrder(allCharacters);
+    setCurrentTurn(0);
+    setActionPhase('select');
+    setPlayerActionsUsed(0);
+    setEnemyActionsUsed(0);
+    
+    setBattleLog(prev => [...prev, `🎯 ด่านที่ ${newStage} เริ่มต้น! (${enemies.length} ศัตรู)`]);
+  }, [currentStage, playerTeam]);
 
   const nextTurn = useCallback(() => {
     setCurrentTurn(prev => (prev + 1) % turnOrder.length);
@@ -165,9 +211,20 @@ export default function Home() {
       character.hp = Math.min(character.hp + healAmount, character.maxHp);
       setBattleLog(prev => [...prev, `${character.emoji} ${character.name} ใช้ ${skill.emoji} ${skill.name} ฟื้นฟู ${healAmount} HP`]);
     } else {
-      // เป็นสกิลโจมตี
+      // เป็นสกิลโจมตี - แสดงเอฟเฟกต์กระพริบ
       target.hp = Math.max(target.hp - damage, 0);
       setBattleLog(prev => [...prev, `${character.emoji} ${character.name} ใช้ ${skill.emoji} ${skill.name} ใส่ ${target.emoji} ${target.name} สร้างความเสียหาย ${damage}!`]);
+      
+      // เอฟเฟกต์กระพริบ
+      setIsFlashing(true);
+      setTimeout(() => setIsFlashing(false), 300);
+    }
+
+    // เพิ่มจำนวนการกระทำ
+    if (character.isPlayer) {
+      setPlayerActionsUsed(prev => prev + 1);
+    } else {
+      setEnemyActionsUsed(prev => prev + 1);
     }
 
     // ตรวจสอบการชนะ/แพ้
@@ -175,8 +232,10 @@ export default function Home() {
     const alivePlayers = playerTeam.filter(p => p.hp > 0);
     
     if (aliveEnemies.length === 0) {
-      setGameState('victory');
-      setBattleLog(prev => [...prev, '🎉 ชนะแล้ว!']);
+      // ศัตรูตายหมด - ไปด่านต่อไป
+      setTimeout(() => {
+        nextStage();
+      }, 1000);
       return;
     }
     
@@ -186,9 +245,23 @@ export default function Home() {
       return;
     }
 
+    // ตรวจสอบว่าแต่ละฝ่ายได้กระทำครบแล้วหรือไม่
+    const totalPlayerActions = playerTeam.filter(p => p.hp > 0).length;
+    const totalEnemyActions = enemyTeam.filter(e => e.hp > 0).length;
+    
+    if (character.isPlayer && playerActionsUsed + 1 >= totalPlayerActions) {
+      // ฝ่ายผู้เล่นกระทำครบแล้ว ให้ศัตรูกระทำ
+      setPlayerActionsUsed(0);
+      setEnemyActionsUsed(0);
+    } else if (!character.isPlayer && enemyActionsUsed + 1 >= totalEnemyActions) {
+      // ฝ่ายศัตรูกระทำครบแล้ว ให้ผู้เล่นกระทำ
+      setPlayerActionsUsed(0);
+      setEnemyActionsUsed(0);
+    }
+
     // เปลี่ยนเทิน
     nextTurn();
-  }, [enemyTeam, playerTeam, nextTurn]);
+  }, [enemyTeam, playerTeam, nextTurn, playerActionsUsed, enemyActionsUsed, nextStage]);
 
   const handleSkillSelect = (skill: Skill) => {
     setSelectedSkill(skill);
@@ -202,8 +275,11 @@ export default function Home() {
 
   const handleExecute = () => {
     if (selectedSkill && selectedTarget) {
-      const currentCharacter = turnOrder[currentTurn];
-      executeAction(currentCharacter, selectedSkill, selectedTarget);
+      const alivePlayers = playerTeam.filter(p => p.hp > 0);
+      const currentCharacter = alivePlayers[playerActionsUsed];
+      if (currentCharacter) {
+        executeAction(currentCharacter, selectedSkill, selectedTarget);
+      }
     }
   };
 
@@ -211,26 +287,52 @@ export default function Home() {
     if (gameState === 'battle' && actionPhase === 'select') {
       const currentCharacter = turnOrder[currentTurn];
       
-      if (!currentCharacter.isPlayer) {
-        setTimeout(() => {
-          const availableSkills = currentCharacter.skills;
-          const randomSkill = availableSkills[Math.floor(Math.random() * availableSkills.length)];
-          
-          const targets = randomSkill.damage < 0 ? enemyTeam.filter(e => e.hp > 0) : playerTeam.filter(p => p.hp > 0);
-          const randomTarget = targets[Math.floor(Math.random() * targets.length)];
-          
-          executeAction(currentCharacter, randomSkill, randomTarget);
-        }, 1000);
+      if (!currentCharacter || !currentCharacter.isPlayer) {
+        // ถ้าเป็นเทิร์นของศัตรูหรือไม่มีตัวละคร
+        const aliveEnemies = enemyTeam.filter(e => e.hp > 0);
+        if (aliveEnemies.length > 0 && enemyActionsUsed < aliveEnemies.length) {
+          setTimeout(() => {
+            const enemyToAct = aliveEnemies[enemyActionsUsed];
+            const availableSkills = enemyToAct.skills;
+            const randomSkill = availableSkills[Math.floor(Math.random() * availableSkills.length)];
+            
+            const targets = randomSkill.damage < 0 ? 
+              aliveEnemies : 
+              playerTeam.filter(p => p.hp > 0);
+            
+            if (targets.length > 0) {
+              const randomTarget = targets[Math.floor(Math.random() * targets.length)];
+              executeAction(enemyToAct, randomSkill, randomTarget);
+            }
+          }, 1000);
+        }
       }
     }
-  }, [currentTurn, actionPhase, gameState, turnOrder, enemyTeam, playerTeam, executeAction]);
+  }, [currentTurn, actionPhase, gameState, turnOrder, enemyTeam, playerTeam, executeAction, enemyActionsUsed]);
 
   const getCurrentCharacter = () => {
-    return turnOrder[currentTurn];
+    if (isCurrentPlayerTurn()) {
+      const alivePlayers = playerTeam.filter(p => p.hp > 0);
+      return alivePlayers[playerActionsUsed] || null;
+    }
+    return null;
   };
 
   const isCurrentPlayerTurn = () => {
-    return getCurrentCharacter()?.isPlayer;
+    const alivePlayers = playerTeam.filter(p => p.hp > 0);
+    const aliveEnemies = enemyTeam.filter(e => e.hp > 0);
+    
+    // ถ้าผู้เล่นกระทำยังไม่ครบ ให้เป็นเทิร์นของผู้เล่น
+    if (playerActionsUsed < alivePlayers.length) {
+      return true;
+    }
+    
+    // ถ้าผู้เล่นกระทำครบแล้ว และศัตรูกระทำครบแล้ว ให้เริ่มรอบใหม่
+    if (enemyActionsUsed >= aliveEnemies.length) {
+      return true;
+    }
+    
+    return false;
   };
 
   const getAvailableTargets = () => {
@@ -266,14 +368,28 @@ export default function Home() {
     return (
       <div className="min-h-screen bg-gradient-to-br from-green-900 via-emerald-900 to-teal-900 flex items-center justify-center p-4">
         <div className="text-center">
-          <h1 className="text-6xl font-bold text-white mb-8">🎉 ชนะแล้ว! 🎉</h1>
-          <p className="text-xl text-green-200 mb-8">คุณได้เอาชนะศัตรูทั้งหมดแล้ว!</p>
-          <button
-            onClick={() => setGameState('menu')}
-            className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold py-4 px-8 rounded-full text-xl transition-all duration-300 transform hover:scale-105"
-          >
-            🏠 กลับหน้าหลัก
-          </button>
+          <h1 className="text-6xl font-bold text-white mb-8">🎉 ผ่านด่านแล้ว! 🎉</h1>
+          <p className="text-xl text-green-200 mb-4">คุณได้ผ่านด่านที่ {currentStage} แล้ว!</p>
+          <p className="text-lg text-green-300 mb-8">
+            ด่านต่อไปจะมีศัตรู {Math.min(currentStage + 1, 3)} ตัว
+          </p>
+          <div className="flex gap-4 justify-center">
+            <button
+              onClick={() => {
+                setGameState('battle');
+                nextStage();
+              }}
+              className="bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white font-bold py-4 px-8 rounded-full text-xl transition-all duration-300 transform hover:scale-105"
+            >
+              ➡️ ด่านต่อไป
+            </button>
+            <button
+              onClick={() => setGameState('menu')}
+              className="bg-gradient-to-r from-gray-600 to-gray-700 hover:from-gray-700 hover:to-gray-800 text-white font-bold py-4 px-8 rounded-full text-xl transition-all duration-300 transform hover:scale-105"
+            >
+              🏠 กลับหน้าหลัก
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -297,12 +413,27 @@ export default function Home() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-zinc-900 p-4">
+    <div className={`min-h-screen bg-gradient-to-br from-slate-900 via-gray-900 to-zinc-900 p-4 transition-all duration-300 ${
+      isFlashing ? 'bg-white bg-opacity-30' : ''
+    }`}>
+      <style jsx>{`
+        .glow-effect {
+          box-shadow: 0 0 20px rgba(255, 255, 0, 0.5), 0 0 40px rgba(255, 255, 0, 0.3);
+          animation: pulse 1s infinite;
+        }
+        @keyframes pulse {
+          0% { box-shadow: 0 0 20px rgba(255, 255, 0, 0.5), 0 0 40px rgba(255, 255, 0, 0.3); }
+          50% { box-shadow: 0 0 25px rgba(255, 255, 0, 0.7), 0 0 50px rgba(255, 255, 0, 0.4); }
+          100% { box-shadow: 0 0 20px rgba(255, 255, 0, 0.5), 0 0 40px rgba(255, 255, 0, 0.3); }
+        }
+      `}</style>
       <div className="max-w-7xl mx-auto">
         {/* Header */}
         <div className="bg-gray-800 rounded-lg p-4 mb-4">
           <h1 className="text-3xl font-bold text-white text-center">⚔️ Battle Arena ⚔️</h1>
           <div className="text-center mt-2">
+            <span className="text-yellow-400">ด่านที่ {currentStage}</span>
+            <span className="text-gray-400 mx-2">|</span>
             <span className="text-yellow-400">เทิน: {getCurrentCharacter()?.emoji} {getCurrentCharacter()?.name}</span>
           </div>
         </div>
@@ -310,9 +441,9 @@ export default function Home() {
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           {/* Player Team */}
           <div className="bg-blue-900 rounded-lg p-4">
-            <h2 className="text-xl font-bold text-white mb-4">🛡️ ทีมผู้เล่น</h2>
+            <h2 className="text-xl font-bold text-white mb-4">🛡️ ทีมผู้เล่น ({playerTeam.filter(p => p.hp > 0).length}/{playerTeam.length})</h2>
             <div className="space-y-3">
-              {playerTeam.map((character) => (
+              {playerTeam.map((character, index) => (
                 <div
                   key={character.id}
                   className={`p-3 rounded-lg border-2 cursor-pointer transition-all ${
@@ -320,6 +451,8 @@ export default function Home() {
                       ? 'border-green-400 bg-green-800'
                       : character.hp === 0
                       ? 'border-red-400 bg-red-800 opacity-50'
+                      : index === playerActionsUsed && isCurrentPlayerTurn() 
+                      ? 'border-yellow-400 bg-yellow-800 glow-effect'
                       : 'border-blue-400 bg-blue-800 hover:bg-blue-700'
                   }`}
                   onClick={() => {
@@ -332,6 +465,9 @@ export default function Home() {
                     <div className="flex items-center">
                       <span className="text-2xl mr-2">{character.emoji}</span>
                       <span className="text-white font-semibold">{character.name}</span>
+                      {index === playerActionsUsed && isCurrentPlayerTurn() && (
+                        <span className="ml-2 text-yellow-400 text-sm">🎯 เทิร์น</span>
+                      )}
                     </div>
                     <div className="text-right">
                       <div className="text-sm text-white">HP: {character.hp}/{character.maxHp}</div>
@@ -354,8 +490,13 @@ export default function Home() {
             
             {isCurrentPlayerTurn() && actionPhase === 'select' && (
               <div className="space-y-3">
-                <h3 className="text-lg text-white">เลือกสกิล:</h3>
-                {getCurrentCharacter()?.skills.map((skill, index) => (
+                <div className="flex justify-between items-center">
+                  <h3 className="text-lg text-white">เลือกสกิล:</h3>
+                  <div className="text-sm text-gray-400">
+                    เหลือ: {playerTeam.filter(p => p.hp > 0).length - playerActionsUsed} การกระทำ
+                  </div>
+                </div>
+                {playerTeam.filter(p => p.hp > 0)[playerActionsUsed]?.skills.map((skill, index) => (
                   <button
                     key={index}
                     onClick={() => handleSkillSelect(skill)}
@@ -429,13 +570,16 @@ export default function Home() {
               <div className="text-center text-gray-400">
                 <div className="text-2xl mb-2">⏳</div>
                 <div>รอศัตรูเล่น...</div>
+                <div className="text-sm mt-1">
+                  ศัตรูกระทำแล้ว: {enemyActionsUsed}/{enemyTeam.filter(e => e.hp > 0).length}
+                </div>
               </div>
             )}
           </div>
 
           {/* Enemy Team */}
           <div className="bg-red-900 rounded-lg p-4">
-            <h2 className="text-xl font-bold text-white mb-4">👹 ศัตรู</h2>
+            <h2 className="text-xl font-bold text-white mb-4">👹 ศัตรู ({enemyTeam.filter(e => e.hp > 0).length}/{enemyTeam.length})</h2>
             <div className="space-y-3">
               {enemyTeam.map((character) => (
                 <div
